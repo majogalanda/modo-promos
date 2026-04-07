@@ -305,6 +305,29 @@
     }
     .modal-close:hover { background:var(--orange); color:#fff; }
 
+    /* ── TOOLKIT BUTTON ──────────────────────────────────── */
+    .btn-toolkit {
+      width:100%; margin-top:20px; padding:14px;
+      background:var(--green-dark); color:#fff; border:none;
+      border-radius:14px; font-size:15px; font-weight:800;
+      font-family:var(--fb); cursor:pointer; transition:all .2s;
+      display:flex; align-items:center; justify-content:center; gap:8px;
+    }
+    .btn-toolkit:hover:not(:disabled) { background:var(--green-mid); transform:translateY(-1px); }
+    .btn-toolkit:disabled { background:var(--muted); cursor:not-allowed; transform:none; opacity:.7; }
+    .toolkit-result {
+      margin-top:12px; padding:12px 16px; background:var(--green-light);
+      border-radius:12px; font-size:13px; font-weight:700; color:var(--green-mid);
+      text-align:center; display:none;
+    }
+    .toolkit-result a { color:var(--green-bright); text-decoration:none; }
+    .toolkit-result a:hover { text-decoration:underline; }
+    .toolkit-error {
+      margin-top:12px; padding:12px 16px; background:#fff0ee;
+      border-radius:12px; font-size:13px; color:var(--orange);
+      text-align:center; display:none;
+    }
+
     .state-msg { text-align:center; padding:60px 20px; color:var(--muted); font-size:14px; font-weight:600; }
     .state-msg .icon { font-size:40px; margin-bottom:12px; }
 
@@ -434,16 +457,28 @@
     </div>
     <div class="modal-promo" id="modal-promo"></div>
     <div id="modal-details"></div>
+
+    <!-- ── TOOLKIT ── -->
+    <button class="btn-toolkit" id="btn-toolkit" onclick="createToolkit()">
+      🖼&nbsp; Crear toolkit
+    </button>
+    <div class="toolkit-result" id="toolkit-result"></div>
+    <div class="toolkit-error"  id="toolkit-error"></div>
   </div>
 </div>
 
 <script>
+// ── CONFIGURACIÓN TOOLKIT ──────────────────────────────────
+// 🔧 Reemplazá esta URL con la de tu Cloud Function después de deployarla
+var CLOUD_FUNCTION_URL = 'https://us-central1-branding-vertex.cloudfunctions.net/modo-toolkit';
+
 // ── STATE ──────────────────────────────────────────────────
 var promos = [];
 var currentView = 'week';
 var anchorDate = new Date();
 var refreshTimer = null;
 var REFRESH_MS = 5 * 60 * 1000;
+var _currentPromo = null;
 
 var COLORS = ['#4f79ff','#00d4aa','#ff6b9d','#f59e0b','#8b5cf6',
               '#ef4444','#10b981','#f97316','#6366f1','#ec4899'];
@@ -453,19 +488,6 @@ function extractPct(promo) {
   var m = String(promo).match(/(\d+(?:[.,]\d+)?)\s*%/);
   return m ? m[1] + '%' : String(promo).trim();
 }
-
-var logoPending = {};
-
-
-function extractPct(promo) {
-  if (!promo) return '';
-  var m = String(promo).match(/(\d+(?:[.,]\d+)?)\s*%/);
-  return m ? m[1] + '%' : String(promo).trim();
-}
-
-
-
-// Try to find a working logo URL for a company name
 
 // ── LOGO CACHE + RESOLVER ─────────────────────────────────
 var logoCache = JSON.parse(localStorage.getItem('modo_logo_cache') || '{}');
@@ -586,7 +608,7 @@ function getMondayOf(d){
   c.setDate(c.getDate()+diff); return c;
 }
 function addDays(d,n){ var c=new Date(d); c.setDate(c.getDate()+n); return c; }
-function jsToWeekday(jsDay){ return jsDay===0?6:jsDay-1; } // 0=Mon...6=Sun
+function jsToWeekday(jsDay){ return jsDay===0?6:jsDay-1; }
 
 // ── PROMO UTILS ────────────────────────────────────────────
 function parseDays(val){
@@ -614,17 +636,6 @@ function getPromosForDate(date){
 function colorFor(name){
   var h=0; for(var i=0;i<(name||'').length;i++) h=(h*31+name.charCodeAt(i))&0xffff;
   return COLORS[h%COLORS.length];
-}
-
-function driveThumb(url){
-  if(!url) return null;
-  url=String(url).trim();
-  var m=url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  if(m) return 'https://drive.google.com/thumbnail?id='+m[1]+'&sz=w80';
-  var m2=url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if(m2) return 'https://drive.google.com/thumbnail?id='+m2[1]+'&sz=w80';
-  if(url.startsWith('http')) return url;
-  return null;
 }
 
 function makeLogoEl(promo, size){
@@ -655,7 +666,7 @@ function makeLogoEl(promo, size){
 }
 
 // ── FILTER ─────────────────────────────────────────────────
-var activeFilters = {}; // { cat: true/false }
+var activeFilters = {};
 
 function buildFilterBar() {
   var categories = {};
@@ -668,7 +679,6 @@ function buildFilterBar() {
   var keys = Object.keys(categories).sort();
   if (keys.length === 0) return;
 
-  // Init: all active on first load
   keys.forEach(function(k) {
     if (activeFilters[k] === undefined) activeFilters[k] = true;
   });
@@ -691,7 +701,6 @@ function buildFilterBar() {
 
 function toggleFilter(cat) {
   activeFilters[cat] = !activeFilters[cat];
-  // If all are off, turn all back on
   var anyOn = Object.keys(activeFilters).some(function(k) { return activeFilters[k]; });
   if (!anyOn) {
     Object.keys(activeFilters).forEach(function(k) { activeFilters[k] = true; });
@@ -892,7 +901,18 @@ function renderMonth(){
 }
 
 // ── MODAL ──────────────────────────────────────────────────
-function openModal(p,date){
+function openModal(p, date){
+  _currentPromo = p;
+
+  // Reset toolkit UI
+  var resEl = document.getElementById('toolkit-result');
+  var errEl = document.getElementById('toolkit-error');
+  var btn   = document.getElementById('btn-toolkit');
+  resEl.style.display = 'none';
+  errEl.style.display  = 'none';
+  btn.disabled = false;
+  btn.innerHTML = '🖼&nbsp; Crear toolkit';
+
   var nombre=p['Nombre']||p['nombre']||'';
   var promo=p['Promoción']||p['Promocion']||p['promocion']||'';
   var start=parseDate(p['Fecha de inicio']);
@@ -932,6 +952,54 @@ function openModal(p,date){
 
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); }
 function handleOverlayClick(e){ if(e.target===document.getElementById('modal-overlay')) closeModal(); }
+
+// ── TOOLKIT GENERATOR ─────────────────────────────────────
+function createToolkit() {
+  if (!_currentPromo) return;
+
+  var btn   = document.getElementById('btn-toolkit');
+  var resEl = document.getElementById('toolkit-result');
+  var errEl = document.getElementById('toolkit-error');
+
+  btn.disabled = true;
+  btn.innerHTML = '⏳&nbsp; Generando…';
+  resEl.style.display = 'none';
+  errEl.style.display  = 'none';
+
+  var p = _currentPromo;
+  var payload = {
+    nombre:       p['Nombre']          || p['nombre']    || '',
+    fecha_inicio: p['Fecha de inicio'] || '',
+    fecha_fin:    p['Fecha de fin']    || '',
+    dias_activos: p['Dias que aplica'] || p['Días que aplica'] || '',
+    porcentaje:   String(p['Promoción'] || p['Promocion'] || '0').replace('%','').trim(),
+    canal:        'Online',
+  };
+
+  fetch(CLOUD_FUNCTION_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    btn.disabled = false;
+    btn.innerHTML = '🖼&nbsp; Crear toolkit';
+    if (data.ok) {
+      resEl.innerHTML = '✅ Listo · <a href="' + escHtml(data.url) + '" target="_blank">Ver en Drive →</a>';
+      resEl.style.display = 'block';
+    } else {
+      errEl.textContent   = '⚠️ ' + (data.error || 'Error desconocido');
+      errEl.style.display = 'block';
+    }
+  })
+  .catch(function() {
+    btn.disabled = false;
+    btn.innerHTML = '🖼&nbsp; Crear toolkit';
+    errEl.textContent   = '⚠️ No se pudo conectar con el servidor.';
+    errEl.style.display = 'block';
+  });
+}
 
 // ── UTILS ──────────────────────────────────────────────────
 function escHtml(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
